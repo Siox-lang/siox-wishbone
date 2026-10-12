@@ -1,0 +1,37 @@
+module wishbone;
+
+// Wishbone B4 (OpenCores), pipelined mode: the Master holds `cyc` for a bus
+// cycle and offers one transfer per `stb`; the Slave accepts it unless
+// `stall`, and ends it with `ack`, `err` or `rty`. Classic (non-pipelined)
+// endpoints tie `stall` low on the Slave or ignore it on the Master. `A` is
+// the address width and `D` the data width; `sel` carries one bit per data
+// byte. Field names drop the spec's `_I`/`_O` suffixes: `dat_w` flows
+// Master -> Slave and `dat_r` Slave -> Master.
+//
+// CLK_I and RST_I stay ordinary ports of the endpoint entities.
+
+use std::bits::unsigned;
+
+pub struct Wishbone<A: integer, D: integer> {
+    pub adr: unsigned[A],
+    pub dat_w: unsigned[D],
+    pub dat_r: unsigned[D],
+    pub sel: unsigned[D / 8],
+    pub we: Bit,
+    pub cyc: Bit,
+    pub stb: Bit,
+    pub ack: Bit,
+    pub err: Bit,
+    pub rty: Bit,
+    pub stall: Bit
+}
+
+pub view Master<A: integer, D: integer> for Wishbone<A, D> {
+    adr out, dat_w out, dat_r in, sel out, we out, cyc out, stb out,
+    ack in, err in, rty in, stall in
+}
+
+pub view Slave<A: integer, D: integer> for Wishbone<A, D> {
+    adr in, dat_w in, dat_r out, sel in, we in, cyc in, stb in,
+    ack out, err out, rty out, stall out
+}

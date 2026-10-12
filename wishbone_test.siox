@@ -1,0 +1,51 @@
+module wishbone_test;
+
+use std::bits::unsigned;
+use wishbone::{Wishbone, Slave};
+
+// A one-register pipelined Slave: never stalls, acknowledges each accepted
+// transfer on the next cycle.
+entity Register { clk: Bit in, bus: Wishbone<8, 32> Slave }
+impl Register {
+    let value: unsigned[32] = 0;
+    let ack: Bit = '0';
+    step: process {
+        if clk.rising() {
+            ack = bus.cyc and bus.stb;
+            if bus.cyc and bus.stb and bus.we {
+                value = bus.dat_w;
+            }
+        }
+    }
+    bus.dat_r = value;
+    bus.ack = ack;
+    bus.err = '0';
+    bus.rty = '0';
+    bus.stall = '0';
+}
+
+#[test]
+entity WishboneTest {}
+impl WishboneTest {
+    let clk: Bit = '0';
+    let bus: Wishbone<8, 32>;
+    let dut: Register = { .clk = clk, .bus = bus };
+
+    bus.adr = 0x10; bus.sel = 0xF; bus.cyc = '1';
+    bus.stb = '1'; bus.we = '1'; bus.dat_w = 0x0BAD_CAFE;
+    await 1ns;
+    assert!(bus.stall == '0', "transfer accepted");
+    clk = '1'; await 1ns; clk = '0';
+    // Pipelined: the read is offered while the write is acknowledged.
+    bus.we = '0';
+    await 1ns;
+    assert!(bus.ack == '1', "write acknowledged");
+    clk = '1'; await 1ns; clk = '0';
+    bus.stb = '0';
+    await 1ns;
+    assert!(bus.ack == '1' and bus.dat_r == 0x0BAD_CAFE, "read acknowledged with the written word");
+    clk = '1'; await 1ns; clk = '0';
+    bus.cyc = '0';
+    await 1ns;
+    assert!(bus.ack == '0', "cycle over");
+}
