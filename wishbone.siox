@@ -35,3 +35,98 @@ pub view Slave<A: integer, D: integer> for Wishbone<A, D> {
     adr in, dat_w in, dat_r out, sel in, we in, cyc in, stb in,
     ack out, err out, rty out, stall out
 }
+
+// One Master to `N` Slaves. Slave `i` owns the `2^REGION` addresses at
+// `i << REGION`; a strobe past the last one is answered with `err` on the
+// next cycle. The bus follows the Slave of the latest strobe, so a Master
+// may pipeline any number of transfers but must not switch Slaves while
+// acknowledges are outstanding.
+pub entity Interconnect<A: integer, D: integer, N: integer, REGION: integer> {
+    clk: Bit in,
+    up: Wishbone<A, D> Slave,
+    down: Wishbone<A, D>[N] Master
+}
+
+impl<A: integer, D: integer, N: integer, REGION: integer> Interconnect<A, D, N, REGION> {
+    let owner: unsigned[A] = 0;
+    let target: unsigned[A];
+    let unmapped: Bit = '0';
+    target = if up.stb { up.adr >> REGION } else { owner };
+
+    track: process {
+        if clk.rising() {
+            if up.cyc and up.stb and not up.stall {
+                owner = target;
+            }
+            unmapped = '0';
+            if target >= N {
+                unmapped = up.cyc and up.stb;
+            }
+        }
+    }
+
+    for i in 0..N - 1 {
+        down[i].adr = up.adr;
+        down[i].dat_w = up.dat_w;
+        down[i].sel = up.sel;
+        down[i].we = up.we;
+        down[i].cyc = if target == i { up.cyc } else { '0' };
+        down[i].stb = if target == i { up.stb } else { '0' };
+    }
+
+    if target < N {
+        up.dat_r = down[target].dat_r;
+        up.ack = down[target].ack;
+        up.err = down[target].err;
+        up.rty = down[target].rty;
+        up.stall = down[target].stall;
+    } else {
+        up.dat_r = 0;
+        up.ack = '0';
+        up.err = unmapped;
+        up.rty = '0';
+        up.stall = '0';
+    }
+}
+
+// `N` Masters sharing one Slave. A Master asks with `cyc`; the lowest
+// requesting index is granted and keeps the bus until it drops `cyc`.
+// Arbitration takes a cycle, during which the requester sees `stall`.
+pub entity Arbiter<A: integer, D: integer, N: integer> {
+    clk: Bit in,
+    up: Wishbone<A, D>[N] Slave,
+    down: Wishbone<A, D> Master
+}
+
+impl<A: integer, D: integer, N: integer> Arbiter<A, D, N> {
+    let busy: Bit = '0';
+    let grant: integer<0..(N - 1)> = 0;
+
+    pick: process {
+        if clk.rising() {
+            if not (busy and up[grant].cyc) {
+                busy = '0';
+                for k in 0..N - 1 {
+                    if up[N - 1 - k].cyc {
+                        busy = '1';
+                        grant = N - 1 - k;
+                    }
+                }
+            }
+        }
+    }
+
+    down.adr = up[grant].adr;
+    down.dat_w = up[grant].dat_w;
+    down.sel = up[grant].sel;
+    down.we = up[grant].we;
+    down.cyc = busy and up[grant].cyc;
+    down.stb = busy and up[grant].stb;
+    for i in 0..N - 1 {
+        up[i].dat_r = down.dat_r;
+        up[i].ack = if grant == i { busy and down.ack } else { '0' };
+        up[i].err = if grant == i { busy and down.err } else { '0' };
+        up[i].rty = if grant == i { busy and down.rty } else { '0' };
+        up[i].stall = if grant == i { not busy or down.stall } else { '1' };
+    }
+}

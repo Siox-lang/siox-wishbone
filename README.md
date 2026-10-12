@@ -22,11 +22,19 @@ entity Peripheral { clk: Bit in, bus: Wishbone<30, 32> Slave }
 
 A parent connects a `Master` and a `Slave` through one `let wire: Wishbone<30, 32>;`.
 
+## Components
+
+| Entity | What it does |
+|---|---|
+| `wishbone::Interconnect<A, D, N, REGION>` | One Master to `N` Slaves. Slave `i` owns the `2^REGION` addresses at `i << REGION`; unmapped strobes get `err`. Pipelined transfers are allowed, but not across Slaves while acknowledges are outstanding. |
+| `wishbone::Arbiter<A, D, N>` | `N` Masters sharing one Slave. Fixed priority (lowest index wins); the winner keeps the bus until it drops `cyc`. |
+
 ## Test
 
 ```bash
 sioxc --std <sioxc>/std --test wishbone_test.siox -o wishbone_test && ./wishbone_test
 ```
 
-`wishbone_test.siox` is a small slave driven by a testbench. Needs a
-`sioxc` with Siox-lang/sioxc#68: width-parameterised struct ports.
+`wishbone_test.siox` and `interconnect_test.siox` drive the interface, the
+interconnect and the arbiter from testbenches. Needs a
+`sioxc` with Siox-lang/sioxc#69: arrays of view ports.

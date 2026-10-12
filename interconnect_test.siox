@@ -1,0 +1,87 @@
+module interconnect_test;
+
+use std::bits::unsigned;
+use wishbone::{Wishbone, Slave, Interconnect, Arbiter};
+
+// A one-register pipelined Slave: never stalls, acknowledges each accepted
+// transfer on the next cycle.
+entity Register { clk: Bit in, bus: Wishbone<8, 32> Slave }
+impl Register {
+    let value: unsigned[32] = 0;
+    let ack: Bit = '0';
+    step: process {
+        if clk.rising() {
+            ack = bus.cyc and bus.stb;
+            if bus.cyc and bus.stb and bus.we {
+                value = bus.dat_w;
+            }
+        }
+    }
+    bus.dat_r = value;
+    bus.ack = ack;
+    bus.err = '0';
+    bus.rty = '0';
+    bus.stall = '0';
+}
+
+// Two Masters share an arbiter in front of a two-Slave interconnect.
+entity System { clk: Bit in, masters: Wishbone<8, 32>[2] Slave }
+impl System {
+    let shared: Wishbone<8, 32>;
+    let slaves: Wishbone<8, 32>[2];
+    let arbiter: Arbiter<8, 32, 2> = { .clk = clk, .up = masters, .down = shared };
+    let bus: Interconnect<8, 32, 2, 4> = { .clk = clk, .up = shared, .down = slaves };
+    let r0: Register = { .clk = clk, .bus = slaves[0] };
+    let r1: Register = { .clk = clk, .bus = slaves[1] };
+}
+
+#[test]
+entity InterconnectTest {}
+impl InterconnectTest {
+    let clk: Bit = '0';
+    let m: Wishbone<8, 32>[2];
+    let dut: System = { .clk = clk, .masters = m };
+    m[0].sel = 0xF; m[1].sel = 0xF; m[0].we = '1'; m[1].we = '1';
+    m[0].cyc = '0'; m[0].stb = '0'; m[1].cyc = '0'; m[1].stb = '0';
+
+    // Both Masters ask at once; Master 0 wins and writes Slave 0.
+    m[0].adr = 0x00; m[0].dat_w = 0x11; m[0].cyc = '1'; m[0].stb = '1';
+    m[1].adr = 0x10; m[1].dat_w = 0x22; m[1].cyc = '1'; m[1].stb = '1';
+    let acks0: integer = 0;
+    let acks1: integer = 0;
+    for cycle in 0..11 {
+        await 1ns;
+        let taken0: Bit = m[0].stb and not m[0].stall;
+        let taken1: Bit = m[1].stb and not m[1].stall;
+        if m[0].ack == '1' { acks0 = acks0 + 1; m[0].cyc = '0'; }
+        if m[1].ack == '1' { acks1 = acks1 + 1; m[1].cyc = '0'; }
+        assert!(acks1 == 0 or acks0 == 1, "the lower index is served first");
+        clk = '1'; await 1ns; clk = '0';
+        if taken0 == '1' { m[0].stb = '0'; }
+        if taken1 == '1' { m[1].stb = '0'; }
+    }
+    assert!(acks0 == 1 and acks1 == 1, "each Master's write is acknowledged once");
+
+    // Master 1 reads both Slaves back, then strobes past the map.
+    m[1].we = '0';
+    for k in 0..2 {
+        m[1].adr = k * 0x10; m[1].cyc = '1'; m[1].stb = '1';
+        let done: Bit = '0';
+        for cycle in 0..5 {
+            await 1ns;
+            let taken: Bit = m[1].stb and not m[1].stall;
+            if m[1].ack == '1' and done == '0' {
+                done = '1';
+                assert!(k < 2 and m[1].dat_r == 0x11 * (k + 1), "each Slave holds its own word");
+            }
+            if m[1].err == '1' and done == '0' {
+                done = '1';
+                assert!(k == 2, "only the unmapped strobe errors");
+            }
+            clk = '1'; await 1ns; clk = '0';
+            if taken == '1' { m[1].stb = '0'; }
+            if done == '1' { m[1].cyc = '0'; }
+        }
+        assert!(done == '1', "every strobe ends");
+    }
+}
